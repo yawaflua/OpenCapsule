@@ -177,8 +177,8 @@ func TestAskRejected(t *testing.T) {
 	e := newAskEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if r := <-e.post("tok", AskRequest{Text: "x"}); r[0] != http.StatusServiceUnavailable {
-		t.Errorf("no speaker = %v", r[0])
+	if r := <-e.post("tok", AskRequest{Text: "x", Listen: true}); r[0] != http.StatusOK || !r[1].(AskResponse).Skipped {
+		t.Errorf("no speaker = %v %+v, want skipped", r[0], r[1])
 	}
 	e.dial(ctx) // an old agent without announcements
 	for range 100 {
@@ -186,7 +186,7 @@ func TestAskRejected(t *testing.T) {
 			t.Fatalf("wrong token = %v", r[0])
 		}
 		r := <-e.post("tok", AskRequest{Text: "x"})
-		if r[0] == http.StatusServiceUnavailable {
+		if r[1].(AskResponse).Skipped {
 			time.Sleep(10 * time.Millisecond) // not registered yet
 			continue
 		}
@@ -196,6 +196,33 @@ func TestAskRejected(t *testing.T) {
 		return
 	}
 	t.Fatal("device did not register")
+}
+
+func TestAsleepWithoutSpeakers(t *testing.T) {
+	s := New(Config{Provider: &textProvider{texts: make(chan string, 1)}, AuthToken: "tok",
+		Logger: slog.New(slog.DiscardHandler)})
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+	if !s.Asleep() {
+		t.Fatal("awake without speakers")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, m, err := dialDevice(t, ctx, ts.URL, "tok", &models.Hello{DeviceID: "kitchen"})
+	if err != nil || m.Type != models.TypeReady {
+		t.Fatalf("dial: %v %+v", err, m)
+	}
+	if s.Asleep() {
+		t.Error("asleep with a speaker")
+	}
+	conn.Close("bye")
+	for !s.Asleep() {
+		select {
+		case <-ctx.Done():
+			t.Fatal("still awake after the speaker left")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 var _ provider.Provider = (*textProvider)(nil)

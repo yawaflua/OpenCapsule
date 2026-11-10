@@ -247,6 +247,7 @@ type panelState struct {
 	Version  string       `json:"version"`
 	Provider string       `json:"provider"`
 	Started  time.Time    `json:"started"`
+	Asleep   bool         `json:"asleep"` // no speaker is connected
 	Tunable  bool         `json:"tunable"`
 	Text     bool         `json:"text"`
 	Saved    bool         `json:"saved"`   // settings survive a restart
@@ -278,6 +279,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 		Version:  s.cfg.Version,
 		Provider: s.cfg.Provider.Name(),
 		Started:  s.started,
+		Asleep:   s.Asleep(),
 		Tunable:  tunable,
 		Text:     provider.AcceptsText(s.cfg.Provider),
 		Saved:    s.cfg.SettingsFile != "",

@@ -368,6 +368,9 @@ type devicePlugins struct {
 	Catalog bool `json:"catalog"`
 	// FromCatalog are the catalog plugins the speaker should run.
 	FromCatalog []models.CatalogPlugin `json:"from_catalog"`
+	// Outdated means the agent is not the server's build, so a missing
+	// feature may be its age rather than its settings.
+	Outdated bool `json:"outdated,omitempty"`
 }
 
 func (s *Server) pluginsState() pluginsState {
@@ -389,6 +392,7 @@ func (s *Server) pluginsState() pluginsState {
 			Tools:       append([]models.PluginTool{}, d.hello.PluginTools...),
 			Catalog:     d.supportsFeature(models.FeatureCatalogPlugins),
 			FromCatalog: s.catalogPluginsFor(d.hello.DeviceID),
+			Outdated:    d.outdated(),
 		}
 		st.Devices = append(st.Devices, dp)
 	}

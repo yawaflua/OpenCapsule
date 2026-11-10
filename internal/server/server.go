@@ -422,7 +422,11 @@ func newID() string {
 func (s *Server) register(d *deviceSession) {
 	s.dmu.Lock()
 	s.devices[d.id] = d
+	woke := len(s.devices) == 1
 	s.dmu.Unlock()
+	if woke {
+		s.cfg.Logger.Info("speaker connected; waking up")
+	}
 	s.events.publish(Event{Kind: EventConnect, Session: d.id, Device: d.hello.DeviceID})
 	s.events.devicesChanged()
 }
@@ -430,9 +434,23 @@ func (s *Server) register(d *deviceSession) {
 func (s *Server) unregister(d *deviceSession) {
 	s.dmu.Lock()
 	delete(s.devices, d.id)
+	asleep := len(s.devices) == 0
 	s.dmu.Unlock()
+	if asleep {
+		s.cfg.Logger.Info("no speakers connected; sleeping until one connects")
+	}
 	s.events.publish(Event{Kind: EventDisconnect, Session: d.id, Device: d.hello.DeviceID})
 	s.events.devicesChanged()
+}
+
+// Asleep reports that no speaker is connected. The server then has nothing
+// to do: model and wake word sessions exist only per speaker, and requests
+// of the ask API (hooks of Claude Code, Home Assistant) are skipped at once
+// instead of waiting for a speaker.
+func (s *Server) Asleep() bool {
+	s.dmu.Lock()
+	defer s.dmu.Unlock()
+	return len(s.devices) == 0
 }
 
 // device returns the connected device with the given session ID.

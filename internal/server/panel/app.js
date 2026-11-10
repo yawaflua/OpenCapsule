@@ -208,6 +208,7 @@ function connectEvents() {
     if (!state.devices.some((d) => d.session === state.selected)) state.selected = state.devices[0]?.session ?? null;
     renderDevices();
     renderDeviceFilter();
+    renderServerLine();
   });
   es.addEventListener("history", (e) => {
     const ev = JSON.parse(e.data);
@@ -381,7 +382,9 @@ $("#spotify-login").addEventListener("submit", async (e) => {
 
 function renderServerLine() {
   const i = state.info;
-  $("#server-line").textContent = `Сервер ${i.version || "dev"} · ${i.provider} · запущен ${fmtDate(i.started)} в ${fmtTime(i.started)}`;
+  const asleep = state.devices ? !state.devices.length : i.asleep;
+  $("#server-line").textContent = `Сервер ${i.version || "dev"} · ${i.provider} · запущен ${fmtDate(i.started)} в ${fmtTime(i.started)}` +
+    (asleep ? " · спит: нет подключённых колонок" : "");
 }
 
 // ---------- devices ----------
@@ -1251,7 +1254,9 @@ function renderDevicePlugins() {
   if (!devs.length) list.append(el("li", { class: "muted", text: "Нет подключённых колонок." }));
   for (const d of devs) {
     let body;
-    if (!d.plugins) body = el("small", { text: "агент без плагинов: каталог не задан или агент устарел" });
+    if (!d.plugins) body = el("small", { text: d.outdated
+      ? "агент устарел: перезагрузите колонку или выполните rc-service marusya-agent restart"
+      : "плагины выключены: задайте MARUSYA_PLUGINS_DIR в /etc/conf.d/marusya-agent и перезапустите агент" });
     else if (!d.tools.length) body = el("small", { text: "плагины не объявили функций" });
     else body = el("div", { class: "tools" }, ...d.tools.map((t) => el("code", { text: `${t.plugin}: ${t.name}`, title: t.description })));
     const fromCatalog = (d.from_catalog || []).map((p) => el("div", { class: "row catalog-speaker" },
@@ -1382,7 +1387,8 @@ function speakerButtons(v) {
   const box = el("div", { class: "row catalog-speakers" }, el("small", { text: "На колонку:" }));
   for (const d of devs) {
     const have = v.speakers?.[d.device];
-    if (!d.catalog) box.append(el("span", { class: "badge off", title: "Обновите агент на колонке", text: `${d.device}: агент устарел` }));
+    if (!d.catalog && d.outdated) box.append(el("span", { class: "badge off", title: "Перезагрузите колонку или пропишите в rc-service marusya-agent restart", text: `${d.device}: агент устарел` }));
+    else if (!d.catalog) box.append(el("span", { class: "badge off", title: "Задайте MARUSYA_PLUGINS_DIR в /etc/conf.d/marusya-agent (например, /tmp/marusya/plugins) и выполните rc-service marusya-agent restart", text: `${d.device}: плагины выключены` }));
     else if (have && have === v.latest_version) box.append(el("span", { class: "badge idle", text: `${d.device}: стоит` }));
     else box.append(el("button", { class: "btn tonal small", type: "button",
       text: have ? `${d.device}: обновить с v${have}` : d.device,
