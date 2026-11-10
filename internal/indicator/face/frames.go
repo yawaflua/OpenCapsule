@@ -37,6 +37,8 @@ const (
 	eyeRight  = seg7.B | seg7.C                                     // pupil right
 	eyeAngryL = seg7.A | seg7.B | seg7.G
 	eyeAngryR = seg7.A | seg7.F | seg7.G
+	eyeSlumpL = seg7.D | seg7.C // _|
+	eyeSlumpR = seg7.E | seg7.D // |_
 	letterZ   = seg7.A | seg7.B | seg7.G | seg7.E | seg7.D
 )
 
@@ -67,6 +69,7 @@ func tired(ms int) Frame     { return fr(wide(eyeLine, eyeLine), true, ms) }
 func winking(ms int) Frame   { return fr(wide(eyeOpen, eyeClosed), true, ms) }
 func down(ms int) Frame      { return fr(wide(eyeLow, eyeLow), true, ms) }
 func angry(ms int) Frame     { return fr(wide(eyeAngryL, eyeAngryR), true, ms) }
+func slumped(ms int) Frame   { return fr(wide(eyeSlumpL, eyeSlumpR), true, ms) }
 func lookLeft(ms int) Frame  { return fr(toLeft(eyeLeft, eyeLeft), true, ms) }
 func lookRight(ms int) Frame { return fr(toRight(eyeRight, eyeRight), true, ms) }
 
@@ -98,8 +101,8 @@ var (
 	}
 	// loopSpeaking: happy eyes, the nose "talks".
 	loopSpeaking = []Frame{happy(260), fr(wide(eyeHappy, eyeHappy), false, 160), happy(320), fr(narrow(eyeHappy, eyeHappy), true, 140)}
-	// loopDisconnected: sad face that sometimes nods off.
-	loopDisconnected = []Frame{sad(2500), tired(300), asleep(500), tired(200)}
+	// loopDisconnected: slumped "_| . |_" face that sometimes nods off.
+	loopDisconnected = []Frame{slumped(2500), tired(300), asleep(500), tired(200)}
 	// loopSleeping: "- . -" whose eyes slowly sink and rise as if breathing.
 	loopSleeping = []Frame{
 		fr(wide(eyeLine, eyeLine), true, 2600),

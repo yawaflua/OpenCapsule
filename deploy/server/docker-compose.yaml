@@ -20,7 +20,7 @@ services:
       dockerfile: deploy/server/Dockerfile
       args:
         VERSION: ${VERSION:-dev}
-    image: ghcr.io/yawaflua/marusya-server:latest
+    image: ghcr.io/yawaflua/opencapsule-server:latest
     container_name: marusya-server
     restart: unless-stopped
     ports:
@@ -60,7 +60,7 @@ services:
     profiles: ["wake"]
     build:
       context: ../wake
-    image: ghcr.io/yawaflua/marusya-wake:latest
+    image: ghcr.io/yawaflua/opencapsule-wake:latest
     container_name: marusya-wake
     restart: unless-stopped
     environment:

@@ -25,6 +25,9 @@
 // notification, e.g. that a permission is needed. Settings come from flags
 // or the environment: MARUSYA_URL (or MARUSYA_SERVER, the ws:// URL of the
 // speakers), MARUSYA_AUTH_TOKEN and MARUSYA_DEVICE.
+//
+// While no speaker is connected the server sleeps and skips the request at
+// once; the hook then does nothing, and Claude Code carries on as usual.
 package main
 
 import (
@@ -67,6 +70,10 @@ func main() {
 	var err error
 	if flag.NArg() == 1 && flag.Arg(0) == "hook" {
 		err = runHook(os.Stdin, os.Stdout)
+		if errors.Is(err, errSkipped) {
+			journal("  skipped: %v", err)
+			err = nil
+		}
 		if err != nil {
 			journal("  error: %v", err)
 		}
@@ -74,6 +81,10 @@ func main() {
 		var answer string
 		var ok bool
 		answer, ok, err = ask(strings.Join(flag.Args(), " "), *listen, cmp(*source, "api"))
+		if errors.Is(err, errSkipped) {
+			fmt.Fprintln(os.Stderr, "marusya-ask:", err)
+			err = nil
+		}
 		if err == nil && *listen {
 			if !ok {
 				fmt.Fprintln(os.Stderr, "no answer")
@@ -122,8 +133,12 @@ type askResponse struct {
 	Device   string `json:"device"`
 	Answered bool   `json:"answered"`
 	Answer   string `json:"answer"`
+	Skipped  bool   `json:"skipped"`
 	Error    string `json:"error"`
 }
+
+// errSkipped is returned when the server sleeps without speakers.
+var errSkipped = errors.New("skipped: no speaker is connected")
 
 // ask calls POST /v1/ask.
 func ask(text string, listen bool, src string) (string, bool, error) {
@@ -156,6 +171,9 @@ func ask(text string, listen bool, src string) (string, bool, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", false, fmt.Errorf("%s: %s", resp.Status, ar.Error)
+	}
+	if ar.Skipped {
+		return "", false, errSkipped
 	}
 	return ar.Answer, ar.Answered, nil
 }

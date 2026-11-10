@@ -20,14 +20,21 @@ Keywords are routed by script:
   fuzzy matched against the keywords. Slower (the utterance has to end), but
   any word in any of Whisper's languages works.
 
+The models are loaded on the first connection. When the last speaker
+disconnects (marusya-server has no speakers), the spotter falls asleep after
+WAKE_SLEEP_AFTER seconds: it unloads the models to free memory and loads them
+again when a speaker comes back. 0 keeps them loaded.
+
 Tuning (environment): VOSK_MIN_CONF, VOSK_HOLD, WHISPER_MODEL,
-WHISPER_COMPUTE_TYPE, WHISPER_DEVICE, WHISPER_THREADS, WHISPER_MATCH, WAKE_COOLDOWN.
+WHISPER_COMPUTE_TYPE, WHISPER_DEVICE, WHISPER_THREADS, WHISPER_MATCH, WAKE_COOLDOWN,
+WAKE_SLEEP_AFTER.
 """
 
 import asyncio
 import collections
 import concurrent.futures
 import difflib
+import gc
 import json
 import logging
 import os
@@ -51,6 +58,7 @@ WHISPER_COMPUTE = os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 WHISPER_THREADS = int(os.environ.get("WHISPER_THREADS", "0")) or os.cpu_count() or 4
 WHISPER_MATCH = float(os.environ.get("WHISPER_MATCH", "0.8"))
 COOLDOWN = float(os.environ.get("WAKE_COOLDOWN", "1.5"))
+SLEEP_AFTER = float(os.environ.get("WAKE_SLEEP_AFTER", "60"))
 
 # One Whisper inference at a time for all speakers: it is CPU heavy.
 whisper_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -71,6 +79,7 @@ def script_of(word: str) -> str:
 _vosk_model = None
 _whisper_model = None
 _whisper_error = None
+_generation = 0  # bumped by unload_models, so a late Whisper load is dropped
 _lock = threading.Lock()
 
 
@@ -95,6 +104,7 @@ def whisper_model():
         if getattr(whisper_model, "loading", False):
             return None
         whisper_model.loading = True
+        generation = _generation
 
     def load():
         global _whisper_model, _whisper_error
@@ -106,15 +116,61 @@ def whisper_model():
             m = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE,
                              cpu_threads=WHISPER_THREADS)
             with _lock:
-                _whisper_model = m
+                if generation == _generation:
+                    _whisper_model = m
             log.info("Whisper model ready")
         except Exception as e:  # noqa: BLE001 - reported to the server
             log.exception("loading Whisper failed")
             with _lock:
-                _whisper_error = e
+                if generation == _generation:
+                    _whisper_error = e
+        finally:
+            with _lock:
+                if generation == _generation:
+                    whisper_model.loading = False
 
     threading.Thread(target=load, daemon=True).start()
     return None
+
+
+def unload_models():
+    """Drops the models; the next connection loads them again."""
+    global _vosk_model, _whisper_model, _whisper_error, _generation
+    with _lock:
+        loaded = _vosk_model is not None or _whisper_model is not None
+        _vosk_model = _whisper_model = _whisper_error = None
+        _generation += 1
+        whisper_model.loading = False
+    gc.collect()
+    return loaded
+
+
+class Sleeper:
+    """Unloads the models a while after the last connection closes."""
+
+    def __init__(self, delay):
+        self.delay = delay
+        self.clients = 0
+        self.timer = None
+
+    def connected(self):
+        self.clients += 1
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+
+    def disconnected(self):
+        self.clients -= 1
+        if self.clients == 0 and self.delay > 0:
+            self.timer = asyncio.get_running_loop().call_later(self.delay, self.sleep)
+
+    def sleep(self):
+        self.timer = None
+        if self.clients == 0 and unload_models():
+            log.info("no speakers: models unloaded, sleeping until one connects")
+
+
+sleeper = Sleeper(SLEEP_AFTER)
 
 
 # ---------- engines ----------
@@ -405,11 +461,33 @@ def build(keywords, rate):
     return spotters, engines, unsupported
 
 
+def feed_all(spotters, pcm, now, emit):
+    """Feeds one audio frame to every spotter.
+
+    Runs on a worker thread: a Vosk decode of a busy box can take tens of
+    milliseconds, and blocking the event loop stalls the keepalive ping/pong
+    until the client drops the stream.
+    """
+    for spotter in spotters:
+        spotter.feed(pcm, now, emit)
+
+
 async def handler(ws):
+    sleeper.connected()
+    try:
+        await serve_speaker(ws)
+    finally:
+        sleeper.disconnected()
+
+
+async def serve_speaker(ws):
     loop = asyncio.get_running_loop()
     peer = ws.remote_address
     spotters = []
     last = -COOLDOWN
+    # One worker per connection: frames stay in order, and a slow verify in
+    # vosk_pool cannot delay the audio path.
+    feed_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="wake-feed")
 
     def emit(keyword, engine, score, at):
         """Reports a keyword heard in the audio received at time at."""
@@ -430,30 +508,35 @@ async def handler(ws):
 
         loop.call_soon_threadsafe(send)
 
-    async for msg in ws:
-        if isinstance(msg, str):
-            try:
-                cfg = json.loads(msg)
-                keywords = [str(k).strip().lower() for k in cfg.get("keywords", []) if str(k).strip()]
-                rate = int(cfg.get("sample_rate", 16000))
-                spotters, engines, unsupported = await loop.run_in_executor(None, build, keywords, rate)
-            except Exception as e:  # noqa: BLE001 - reported to the server
-                log.exception("configure")
-                await ws.send(json.dumps({"error": str(e)}))
-                return
-            log.info("%s: keywords %s", peer, engines)
-            await ws.send(json.dumps({"ready": True, "engines": engines, "unsupported": unsupported},
-                                     ensure_ascii=False))
-            continue
-        now = time.monotonic()
-        for s in spotters:
-            s.feed(msg, now, emit)
+    try:
+        async for msg in ws:
+            if isinstance(msg, str):
+                try:
+                    cfg = json.loads(msg)
+                    keywords = [str(k).strip().lower() for k in cfg.get("keywords", []) if str(k).strip()]
+                    rate = int(cfg.get("sample_rate", 16000))
+                    spotters, engines, unsupported = await loop.run_in_executor(None, build, keywords, rate)
+                except Exception as e:  # noqa: BLE001 - reported to the server
+                    log.exception("configure")
+                    await ws.send(json.dumps({"error": str(e)}))
+                    return
+                log.info("%s: keywords %s", peer, engines)
+                await ws.send(json.dumps({"ready": True, "engines": engines, "unsupported": unsupported},
+                                         ensure_ascii=False))
+                continue
+            now = time.monotonic()
+            await loop.run_in_executor(feed_pool, feed_all, spotters, msg, now, emit)
+    finally:
+        feed_pool.shutdown(wait=False, cancel_futures=True)
 
 
 async def main():
     host, _, port = os.environ.get("WAKE_LISTEN", "0.0.0.0:2700").rpartition(":")
-    vosk_model()  # fail fast on a broken image
-    async with serve(handler, host or "0.0.0.0", int(port), max_size=1 << 20):
+    if not os.path.isdir(VOSK_MODEL):  # fail fast on a broken image
+        raise SystemExit(f"no Vosk model at {VOSK_MODEL}")
+    import vosk  # noqa: F401 - the model itself is loaded on the first connection
+    async with serve(handler, host or "0.0.0.0", int(port), max_size=1 << 20,
+                      ping_interval=20, ping_timeout=60):
         log.info("listening on %s:%s", host, port)
         await asyncio.get_running_loop().create_future()
 

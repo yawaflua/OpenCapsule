@@ -1,11 +1,15 @@
 # Copyright 2026 The Marusya-Gemini Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-# Builds the marusya-server and marusya-wake images for linux/amd64 and
-# linux/arm64 and pushes them to GitHub Container Registry:
+# Builds the opencapsule-server and opencapsule-wake images for linux/amd64
+# and linux/arm64 and pushes them to GitHub Container Registry:
 #
-#   ghcr.io/<owner>/marusya-server
-#   ghcr.io/<owner>/marusya-wake
+#   ghcr.io/<owner>/opencapsule-server
+#   ghcr.io/<owner>/opencapsule-wake
+#
+# The same manifests are also tagged under the obsolete names marusya-server
+# and marusya-wake, annotated as deprecated, so existing compose files keep
+# pulling updates until they switch to the new names.
 #
 # Tags: "latest" and "master" from master, "dev" and "stage" from stage,
 # "1.2.3" / "1.2" from v1.2.3 tags, "sha-<short>" from every push.
@@ -61,10 +65,10 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - name: marusya-server
+          - name: opencapsule-server
             context: .
             file: deploy/server/Dockerfile
-          - name: marusya-wake
+          - name: opencapsule-wake
             context: deploy/wake
             file: deploy/wake/Dockerfile
         platform:
@@ -137,7 +141,11 @@ jobs:
     needs: build
     strategy:
       matrix:
-        image: [marusya-server, marusya-wake]
+        include:
+          - image: opencapsule-server
+            legacy: marusya-server
+          - image: opencapsule-wake
+            legacy: marusya-wake
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -150,7 +158,9 @@ jobs:
           merge-multiple: true
 
       - id: vars
-        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.image }}" >> "$GITHUB_OUTPUT"
+          echo "legacy=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${{ matrix.legacy }}" >> "$GITHUB_OUTPUT"
 
       - id: meta
         uses: docker/metadata-action@v5
@@ -178,6 +188,18 @@ jobs:
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ steps.vars.outputs.image }}@sha256:%s ' *)
+
+      # Obsolete name, kept for compatibility: same tags, same manifests.
+      - name: Tag the obsolete name
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          LEGACY: ${{ steps.vars.outputs.legacy }}
+        run: |
+          tags=$(jq -cr --arg i "$IMAGE" --arg l "$LEGACY" \
+            '.tags | map("-t " + ($l + ltrimstr($i))) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools create $tags \
+            --annotation "index:org.opencontainers.image.description=OBSOLETE: use $IMAGE instead" \
+            "$IMAGE:${{ steps.meta.outputs.version }}"
 
       - name: Inspect image
         run: docker buildx imagetools inspect ${{ steps.vars.outputs.image }}:${{ steps.meta.outputs.version }}
