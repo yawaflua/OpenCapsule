@@ -36,6 +36,9 @@ import (
 //	{"text": "Клод спрашивает: …", "listen": true, "device": "", "timeout": 120, "source": "claude"}
 //	→ {"device": "vk-mini-a113x", "answered": true, "answer": "да, продолжай"}
 //
+// While no speaker is connected the server sleeps (see [Server.Asleep]) and
+// answers at once with {"skipped": true}, so hooks do not hang.
+//
 // The message is synthesized, played once the speaker is free (with a chime
 // and an orange ring) and, with listen, the next utterance is transcribed
 // and returned instead of going to the model.
@@ -58,6 +61,7 @@ var (
 	errAskTimeout  = errors.New("колонка была занята всё это время")
 	errNoAnswer    = errors.New("no answer")
 	errAskReplaced = errors.New("колонка отключилась")
+	errAsleep      = errors.New("нет подключённых колонок: запрос пропущен")
 )
 
 // pendingAsk is an announcement being delivered to a device.
@@ -91,7 +95,10 @@ type AskResponse struct {
 	Device   string `json:"device"`
 	Answered bool   `json:"answered"`
 	Answer   string `json:"answer,omitempty"`
-	Error    string `json:"error,omitempty"`
+	// Skipped means no speaker is connected, so nothing was said; callers
+	// such as hooks should carry on as if the ask API were not there.
+	Skipped bool   `json:"skipped,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +118,10 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	case utf8.RuneCountInString(req.Text) > maxAskText:
 		writeAsk(w, http.StatusBadRequest, AskResponse{Error: "text is too long"})
+		return
+	}
+	if s.Asleep() {
+		writeAsk(w, http.StatusOK, AskResponse{Device: req.Device, Skipped: true, Error: errAsleep.Error()})
 		return
 	}
 	wait := defaultAskWait
