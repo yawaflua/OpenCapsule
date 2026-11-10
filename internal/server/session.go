@@ -178,9 +178,14 @@ func (d *deviceSession) info() DeviceInfo {
 		LastTurn:     d.lastTurn,
 		CanSay:       provider.AcceptsText(d.cfg.Provider) && slices.Contains(d.hello.Features, models.FeatureRemoteTurn),
 		AgentVersion: d.hello.AgentVersion,
-		Outdated:     buildinfo.Known(d.cfg.Version) && d.hello.AgentVersion != d.cfg.Version,
+		Outdated:     d.outdated(),
 		AutoUpdate:   d.hello.AutoUpdate,
 	}
+}
+
+// outdated reports that the agent is not the server's build.
+func (d *deviceSession) outdated() bool {
+	return buildinfo.Known(d.cfg.Version) && d.hello.AgentVersion != d.cfg.Version
 }
 
 func (d *deviceSession) run(ctx context.Context) error {
