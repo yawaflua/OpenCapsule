@@ -1,6 +1,6 @@
-# Marusya × Gemini
+# OpenCapsula
 
-Голосовой ассистент для умной колонки «Маруся» на базе **Gemini Live API**.
+OpenCapsula — открытый голосовой ассистент для умной колонки «Маруся» (VK Капсула) на базе **Gemini Live API**.
 Проект состоит из двух частей на Go:
 
 | Бинарник | Где работает | Что делает |
@@ -19,8 +19,9 @@
 ## Быстрый старт
 
 Нужен сервер с Docker (amd64 или arm64) в одной сети с колонкой и root по SSH на колонке.
-Готовые образы `ghcr.io/yawaflua/marusya-server` и `ghcr.io/yawaflua/marusya-wake` публичные,
-собирать ничего не надо.
+Готовые образы `ghcr.io/yawaflua/opencapsule-server` и `ghcr.io/yawaflua/opencapsule-wake` публичные,
+собирать ничего не надо. Старые имена `marusya-server` и `marusya-wake` устарели: под ними
+публикуются те же образы для совместимости, но лучше перейти на новые.
 
 **1. Docker и папка для сервера**
 
@@ -28,7 +29,7 @@
 curl -fsSL https://get.docker.com | sh
 mkdir -p ~/marusya/plugins && cd ~/marusya
 sudo chown 65532 plugins   # плагины хранят тут своё состояние
-curl -fsSLO https://raw.githubusercontent.com/yawaflua/Gemini-for-Capsula/master/docker-compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/yawaflua/OpenCapsule/master/docker-compose.yaml
 ```
 
 **2. Ключи в `.env`** (рядом с `docker-compose.yaml`)
@@ -200,8 +201,9 @@ docker compose -f deploy/server/docker-compose.yaml logs -f
 ```
 
 Готовые образы для amd64 и arm64 CI собирает из `master`, `stage` и тегов `v*`
-(`.github/workflows/docker.yml`): `ghcr.io/yawaflua/marusya-server` и
-`ghcr.io/yawaflua/marusya-wake`. Тег `latest` соответствует `master`, тег `dev`
+(`.github/workflows/docker.yml`): `ghcr.io/yawaflua/opencapsule-server` и
+`ghcr.io/yawaflua/opencapsule-wake`. Те же образы пока выходят и под старыми именами
+`marusya-server` и `marusya-wake`, но они помечены устаревшими (obsolete). Тег `latest` соответствует `master`, тег `dev`
 соответствует `stage`. Чтобы не собирать локально:
 
 ```bash
@@ -580,6 +582,10 @@ cd deploy/server && docker compose --profile wake up -d --build
 - Можно задать до 10 слов через запятую. Панель предупредит, если слово не поддерживается.
 - Кнопка и `-wake_command` на колонке продолжают работать. Без `MARUSYA_WAKE_URL`, а также
   со старым агентом звук в режиме ожидания никуда не отправляется.
+- Когда к серверу не подключена ни одна колонка, сервис засыпает: через `WAKE_SLEEP_AFTER`
+  секунд (по умолчанию 60) он выгружает модели Vosk и Whisper из памяти и загружает их снова,
+  когда колонка вернётся. Первое срабатывание после сна приходит на пару секунд позже.
+  `WAKE_SLEEP_AFTER=0` держит модели загруженными всегда.
 
 > Важно: при серверном слове микрофон слушает постоянно, и звук уходит на ваш сервер
 > в локальной сети. Дальше сервера он не идёт: в Gemini попадает только запрос после
@@ -610,7 +616,10 @@ curl -s http://192.168.31.80:8080/v1/ask -H "Authorization: Bearer $MARUSYA_AUTH
 4. С `listen` колонка 10 секунд ждёт ответа. Ответ распознаётся и возвращается в JSON. Модели он не передаётся, Маруся сама ничего не отвечает.
 5. Если нажать кнопку во время чтения, колонка перестанет читать и сразу начнёт слушать.
 
-Если никто не ответил, придёт `"answered": false`. Поля запроса:
+Если никто не ответил, придёт `"answered": false`. Если к серверу не подключена ни одна
+колонка, сервер спит: запрос сразу пропускается с `"skipped": true` (код 200), ничего не
+озвучивается и не ждёт. Хук `marusya-ask` в этом случае молча завершается, и Claude Code
+работает как без него. Поля запроса:
 - `text` — что сказать, до 1000 символов;
 - `listen` — ждать ли ответа;
 - `device` — ID колонки (по умолчанию первая);
@@ -1052,5 +1061,12 @@ WebSocket `GET /v1/stream`, авторизация `Authorization: Bearer <token
 
 ## Лицензия
 
-[Apache License 2.0](LICENSE). Copyright 2026 The Marusya-Gemini Authors: Dmitri 'yawaflua' Shimanski и контрибьюторы из [AUTHORS](AUTHORS) (см. [NOTICE](NOTICE)).
-Как предложить изменения — в [CONTRIBUTING.md](CONTRIBUTING.md).
+Проект распространяется под лицензией [Apache License 2.0](LICENSE).
+
+Copyright © 2026 The OpenCapsula Authors — Дмитрий «yawaflua» Шиманский и контрибьюторы (см. [AUTHORS](AUTHORS) и [NOTICE](NOTICE)).
+
+Как предложить изменения, описано в [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Отказ от ответственности
+
+Проект развивается независимыми энтузиастами. Он не аффилирован с VK (МКПАО «ВК»), не одобрен и не поддерживается компанией или её сотрудниками. «Маруся», «VK Капсула» и связанные названия являются товарными знаками их правообладателей и используются здесь только для описания совместимости.

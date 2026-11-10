@@ -1,6 +1,6 @@
 services:
   marusya-server:
-    image: ghcr.io/yawaflua/marusya-server:latest
+    image: ghcr.io/yawaflua/opencapsule-server:latest
     container_name: marusya-server
     restart: unless-stopped
     ports:
@@ -39,7 +39,7 @@ services:
         max-file: "3"
 
   marusya-wake:
-    image: ghcr.io/yawaflua/marusya-wake:latest
+    image: ghcr.io/yawaflua/opencapsule-wake:latest
     container_name: marusya-wake
     restart: unless-stopped
     environment:
