@@ -87,6 +87,10 @@
             <div><strong>D-Bus</strong><small class="hint">Зарегистрировать сервис <code>ru.marusya.Agent</code> на системной шине: правила в <code>/etc/dbus-1/system.d/</code>, группа <code>marusya</code>, автозапуск dbus. Нужен своим скриптам и плагинам для кольца, экрана и датчиков.</small></div>
           </div>
           <div class="opt-row">
+            <label class="switch"><input type="checkbox" role="switch" id="inst-sound" checked><span class="switch-track"><span class="switch-handle"></span></span></label>
+            <div><strong>Звук</strong><small class="hint">Настройки ALSA для VK Капсулы Мини: громкость, усиление микрофона и эквалайзер динамика в <code>/etc/asound.conf</code>. Эквалайзер потом настраивается на странице колонки. Прежний файл сохранится в <code>/etc/asound.conf.orig</code>.</small></div>
+          </div>
+          <div class="opt-row">
             <label class="switch"><input type="checkbox" role="switch" id="inst-airplay"><span class="switch-track"><span class="switch-handle"></span></span></label>
             <div><strong>AirPlay 2</strong><small class="hint">Музыка с iPhone, iPad и Mac. Сборка <a href="https://github.com/ryysel/capsula-mini-airplay2" target="_blank" rel="noopener">capsula-mini-airplay2</a>, нужны Alpine 3.24 и интернет на колонке.</small></div>
           </div>
@@ -392,6 +396,21 @@
         <button class="btn small text" data-act="bt-off" data-cap="bluetooth.disconnect">Отключить все</button>
       </div>
     </div>
+  </div>
+
+  <div class="card eq" data-cap="eq.get">
+    <h3>Эквалайзер <span class="value muted" data-f="eq-state"></span></h3>
+    <div class="eq-bands" data-f="eq-bands">
+      <span class="muted small-text">Полоса</span>
+      <span class="muted small-text">Частота, Гц</span>
+      <span class="muted small-text">Ширина Q</span>
+      <span class="muted small-text">Усиление, дБ</span>
+    </div>
+    <div class="row">
+      <button class="btn tonal small" data-f="eq-apply" data-cap="eq.set">Применить</button>
+      <button class="btn text small" data-f="eq-reset" data-cap="eq.reset">Стандартные</button>
+    </div>
+    <p class="hint">Убирает гул и резкость маленького динамика. Ширина Q от 0 до 1: чем больше, тем уже полоса. Ответы ассистента звучат по-новому со следующей фразы, музыка — со следующего трека. Стандартные настройки обновляются вместе с агентом, свои остаются.</p>
   </div>
 
   <div class="card surface" data-cap="ring.set display.show sensors.get">

@@ -92,6 +92,16 @@ type Sensors interface {
 	Surface(ctx context.Context) (models.SurfaceState, error)
 }
 
+// Equalizer tunes how the speaker sounds.
+type Equalizer interface {
+	EQ(ctx context.Context) (models.EQState, error)
+	// SetEQ sets the bands by hand; they are checked with
+	// [models.ValidateEQ].
+	SetEQ(ctx context.Context, bands []models.EQBand) error
+	// ResetEQ returns to the defaults.
+	ResetEQ(ctx context.Context) error
+}
+
 // Dispatcher routes commands to controllers. Nil controllers disable the
 // corresponding actions.
 type Dispatcher struct {
@@ -102,6 +112,7 @@ type Dispatcher struct {
 	Ring      Ring
 	Display   Display
 	Sensors   Sensors
+	Equalizer Equalizer
 }
 
 // Capabilities lists the actions the dispatcher can execute.
@@ -130,6 +141,9 @@ func (d *Dispatcher) Capabilities() []models.Action {
 	}
 	if d.Sensors != nil {
 		out = append(out, models.ActionSensorsGet)
+	}
+	if d.Equalizer != nil {
+		out = append(out, models.ActionEQGet, models.ActionEQSet, models.ActionEQReset)
 	}
 	return out
 }
@@ -285,6 +299,25 @@ func (d *Dispatcher) execute(ctx context.Context, cmd *models.Command) (map[stri
 		}
 		return s.Map(), nil
 
+	case models.ActionEQGet:
+		return d.eqState(ctx)
+
+	case models.ActionEQSet:
+		bands, err := cmd.EQBands("bands")
+		if err != nil {
+			return nil, err
+		}
+		if err := d.Equalizer.SetEQ(ctx, bands); err != nil {
+			return nil, err
+		}
+		return d.eqState(ctx)
+
+	case models.ActionEQReset:
+		if err := d.Equalizer.ResetEQ(ctx); err != nil {
+			return nil, err
+		}
+		return d.eqState(ctx)
+
 	case models.ActionBluetoothDevices:
 		devs, err := d.Bluetooth.Devices(ctx)
 		if err != nil {
@@ -297,6 +330,16 @@ func (d *Dispatcher) execute(ctx context.Context, cmd *models.Command) (map[stri
 		return map[string]any{"devices": list}, nil
 	}
 	return nil, fmt.Errorf("%s: %w", cmd.Action, ErrUnsupported)
+}
+
+// eqState reports the equalizer, also after a change, so the panel shows
+// what the speaker took.
+func (d *Dispatcher) eqState(ctx context.Context) (map[string]any, error) {
+	s, err := d.Equalizer.EQ(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.Map(), nil
 }
 
 // nowPlaying reports what started playing, so the assistant can name it.

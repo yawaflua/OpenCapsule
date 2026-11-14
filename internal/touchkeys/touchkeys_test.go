@@ -171,3 +171,146 @@ func TestPanel(t *testing.T) {
 		t.Errorf("overlays = %v, want %v", ov.text, want)
 	}
 }
+
+type fakeMedia struct {
+	mu      sync.Mutex
+	playing bool
+	ops     []models.MediaOperation
+}
+
+func (m *fakeMedia) Control(_ context.Context, op models.MediaOperation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ops = append(m.ops, op)
+	switch op {
+	case models.MediaPause:
+		m.playing = false
+	case models.MediaPlay:
+		m.playing = true
+	}
+	return nil
+}
+
+func (m *fakeMedia) PlayURL(context.Context, string) error { return nil }
+
+func (m *fakeMedia) Status(context.Context) (models.MediaStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return models.MediaStatus{Playing: m.playing, Title: "Кино - Группа крови"}, nil
+}
+
+func (m *fakeMedia) set(playing bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.playing = playing
+}
+
+// takeOps waits for n operations and returns them.
+func (m *fakeMedia) takeOps(t *testing.T, n int) []models.MediaOperation {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		m.mu.Lock()
+		if len(m.ops) >= n || time.Now().After(deadline) {
+			ops := m.ops
+			m.ops = nil
+			m.mu.Unlock()
+			return ops
+		}
+		m.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestPanelMediaKeys(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "event0")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip("mkfifo:", err)
+	}
+	vol := &fakeVolume{level: 50}
+	media := &fakeMedia{playing: true}
+	var busy atomic.Bool
+	cfg := DefaultConfig()
+	cfg.Device = fifo
+	cfg.RepeatDelay = 80 * time.Millisecond
+	cfg.RepeatInterval = time.Hour // one volume step per hold
+	p := &Panel{
+		Config:     cfg,
+		Dispatcher: &controller.Dispatcher{Volume: vol, Media: media},
+		Busy:       busy.Load,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := make(chan wakeword.Detection, 4)
+	go p.Run(ctx, nil, out)
+	w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	send := func(code uint16, v int32) { w.Write(event(code, v)) }
+	tap := func(code uint16) { send(code, 1); send(code, 0) }
+	expectOps := func(what string, want ...models.MediaOperation) {
+		t.Helper()
+		if got := media.takeOps(t, len(want)); !slices.Equal(got, want) {
+			t.Errorf("%s: media operations = %v, want %v", what, got, want)
+		}
+	}
+	expectWake := func(what string, want bool) {
+		t.Helper()
+		select {
+		case <-out:
+			if !want {
+				t.Errorf("%s: the assistant was activated", what)
+			}
+		case <-time.After(100 * time.Millisecond):
+			if want {
+				t.Errorf("%s: the assistant was not activated", what)
+			}
+		}
+	}
+
+	// Taps on the volume keys skip tracks.
+	tap(KeyVolumeUp)
+	expectOps("tap volume up", models.MediaNext)
+	tap(KeyVolumeDown)
+	expectOps("tap volume down", models.MediaPrevious)
+
+	// Holding changes the volume and does not skip.
+	send(KeyVolumeUp, 1)
+	time.Sleep(150 * time.Millisecond)
+	send(KeyVolumeUp, 0)
+	time.Sleep(50 * time.Millisecond)
+	if lvl, _ := vol.Get(ctx); lvl.Level != 55 {
+		t.Errorf("volume after a hold = %d, want 55", lvl.Level)
+	}
+	expectOps("hold volume up")
+
+	// The centre key pauses, then plays on; no assistant.
+	tap(KeyVoice)
+	expectOps("centre while playing", models.MediaPause)
+	expectWake("centre while playing", false)
+	tap(KeyVoice)
+	expectOps("centre after its pause", models.MediaPlay)
+	expectWake("centre after its pause", false)
+
+	// While the assistant is busy, the centre key is for it.
+	busy.Store(true)
+	tap(KeyVoice)
+	expectWake("centre while busy", true)
+	expectOps("centre while busy")
+	busy.Store(false)
+
+	// Music paused some other way: the centre key is the assistant again,
+	// and the volume keys change the volume at once.
+	media.set(false)
+	tap(KeyVoice)
+	expectWake("centre with paused music", true)
+	expectOps("centre with paused music")
+	tap(KeyVolumeDown)
+	time.Sleep(50 * time.Millisecond)
+	if lvl, _ := vol.Get(ctx); lvl.Level != 50 {
+		t.Errorf("volume after a tap without music = %d, want 50", lvl.Level)
+	}
+	expectOps("tap volume down without music")
+}

@@ -116,6 +116,12 @@ const FeaturePlugins Feature = "plugins"
 // catalog through the server and understands [TypeCatalogPlugins].
 const FeatureCatalogPlugins Feature = "catalog_plugins"
 
+// FeatureTurnMedia means the device reports what its media player is
+// doing in [Message.Media] of every [TypeTurnStart], so the model knows
+// what plays without asking. The status is taken before the device ducks
+// the music for the turn.
+const FeatureTurnMedia Feature = "turn_media"
+
 // Message is the envelope of every JSON text frame.
 //
 // Exactly one payload field matching Type is expected to be set.
@@ -139,6 +145,11 @@ type Message struct {
 	Plugin        *PluginMessage `json:"plugin,omitempty"`
 
 	CatalogPlugins *CatalogPlugins `json:"catalog_plugins,omitempty"`
+
+	// Media is the media player at the start of the turn, sent with
+	// [TypeTurnStart] by devices announcing [FeatureTurnMedia]. Music the
+	// device paused for the turn itself is reported as playing.
+	Media *MediaStatus `json:"media,omitempty"`
 }
 
 // CatalogPlugins is the payload of [TypeCatalogPlugins].

@@ -73,6 +73,8 @@ type Session struct {
 	recording bool
 	cancel    context.CancelFunc // aborts the running turn
 	results   chan []provider.ToolResult
+	note      string         // from NoteTurn, taken by the next StartTurn
+	turnNote  string         // the note of the turn being recorded
 	running   sync.WaitGroup // turn goroutines, waited for by Close
 
 	// turnMu serializes turns: a new turn waits for the abandoned one to
@@ -85,6 +87,7 @@ type Session struct {
 var (
 	_ provider.Session    = (*Session)(nil)
 	_ provider.TextSender = (*Session)(nil)
+	_ provider.TurnNoter  = (*Session)(nil)
 )
 
 // New returns a session.
@@ -122,6 +125,19 @@ func (s *Session) StartTurn() error {
 	}
 	s.audio.Reset()
 	s.recording = true
+	s.turnNote, s.note = s.note, ""
+	s.mu.Unlock()
+	return nil
+}
+
+// NoteTurn implements [provider.TurnNoter]: the note goes to the model with
+// the text of the next turn (see [Output.WithNote]).
+func (s *Session) NoteTurn(note string) error {
+	if s.closed() {
+		return provider.ErrClosed
+	}
+	s.mu.Lock()
+	s.note = note
 	s.mu.Unlock()
 	return nil
 }
@@ -152,7 +168,9 @@ func (s *Session) EndTurn() error {
 	s.recording = false
 	pcm := bytes.Clone(s.audio.Bytes())
 	s.audio.Reset()
-	s.startLocked(pcm, "")
+	note := s.turnNote
+	s.turnNote = ""
+	s.startLocked(pcm, "", note)
 	return nil
 }
 
@@ -172,13 +190,14 @@ func (s *Session) SendText(text string) error {
 	}
 	s.recording = false
 	s.audio.Reset()
-	s.startLocked(nil, text)
+	s.turnNote = "" // a typed request is not the recorded turn
+	s.startLocked(nil, text, "")
 	return nil
 }
 
 // startLocked runs a turn in its own goroutine. s.mu must be held; it is
 // released.
-func (s *Session) startLocked(pcm []byte, text string) {
+func (s *Session) startLocked(pcm []byte, text, note string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.running.Add(1)
@@ -189,7 +208,7 @@ func (s *Session) startLocked(pcm []byte, text string) {
 		defer cancel()
 		s.turnMu.Lock()
 		defer s.turnMu.Unlock()
-		s.turn(ctx, pcm, text)
+		s.turn(ctx, pcm, text, note)
 	}()
 }
 
@@ -240,7 +259,7 @@ func (s *Session) emit(ctx context.Context, e provider.Event) bool {
 // turn answers one utterance, or typed text if it is not empty. Errors are
 // spoken as a short apology; the turn always ends with EventTurnComplete
 // unless it was abandoned.
-func (s *Session) turn(ctx context.Context, pcm []byte, text string) {
+func (s *Session) turn(ctx context.Context, pcm []byte, text, note string) {
 	if ctx.Err() != nil || s.closed() {
 		return
 	}
@@ -267,6 +286,7 @@ func (s *Session) turn(ctx context.Context, pcm []byte, text string) {
 	}
 
 	out := newOutput(ctx, s)
+	out.note = note
 	defer out.close()
 	if err := s.conv.Turn(ctx, text, out); err != nil && ctx.Err() == nil {
 		log.Warn(s.cfg.Name+": request failed", "err", err)
@@ -285,6 +305,17 @@ type Output struct {
 	queue chan string
 	done  chan struct{}
 	spoke bool
+	note  string
+}
+
+// WithNote returns the user's text for the model, preceded by the note the
+// server gave for this turn ([provider.TurnNoter]), if any. Conversations
+// use it for the user message; fast paths should match the bare text.
+func (o *Output) WithNote(text string) string {
+	if o.note == "" {
+		return text
+	}
+	return o.note + "\n" + text
 }
 
 func newOutput(ctx context.Context, s *Session) *Output {

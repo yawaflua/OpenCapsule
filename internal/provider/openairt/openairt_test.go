@@ -212,3 +212,36 @@ func TestServerVADEvents(t *testing.T) {
 		t.Fatalf("speech_stopped = %v", ev)
 	}
 }
+
+func TestNoteTurn(t *testing.T) {
+	got := make(chan map[string]any, 100)
+	srv := fakeAPI(t, got)
+	defer srv.Close()
+
+	p, _ := New(Config{BaseURL: srv.URL + "/v1", APIKey: "k"})
+	s, err := p.Connect(context.Background(), provider.SessionOptions{InputFormat: models.DeviceInputFormat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	<-got // session.update
+	if err := s.(provider.TurnNoter).NoteTurn("[играет музыка]"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ev := <-got:
+		item, _ := ev["item"].(map[string]any)
+		content, _ := item["content"].([]any)
+		if ev["type"] != "conversation.item.create" || item["role"] != "system" || len(content) != 1 ||
+			content[0].(map[string]any)["text"] != "[играет музыка]" {
+			t.Fatalf("note event = %v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no note sent")
+	}
+	select {
+	case ev := <-got:
+		t.Fatalf("unexpected %v after the note: it must not start a response", ev["type"])
+	case <-time.After(100 * time.Millisecond):
+	}
+}

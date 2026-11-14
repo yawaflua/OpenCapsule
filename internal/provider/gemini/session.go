@@ -36,6 +36,10 @@ type session struct {
 	// not support concurrent writers.
 	writeMu sync.Mutex
 
+	noteMu   sync.Mutex
+	note     string // from NoteTurn, taken by the next StartTurn
+	turnNote string // sent after the first audio chunk of the turn
+
 	closeOnce sync.Once
 	errMu     sync.Mutex
 	err       error
@@ -44,6 +48,7 @@ type session struct {
 var (
 	_ provider.Session    = (*session)(nil)
 	_ provider.TextSender = (*session)(nil)
+	_ provider.TurnNoter  = (*session)(nil)
 )
 
 func newSession(gs *genai.Session, in models.AudioFormat, serverVAD bool) *session {
@@ -68,6 +73,9 @@ func (s *session) send(in genai.LiveRealtimeInput) error {
 }
 
 func (s *session) StartTurn() error {
+	s.noteMu.Lock()
+	s.turnNote, s.note = s.note, ""
+	s.noteMu.Unlock()
 	if s.serverVAD {
 		return nil
 	}
@@ -75,9 +83,34 @@ func (s *session) StartTurn() error {
 }
 
 func (s *session) SendAudio(pcm []byte) error {
-	return s.send(genai.LiveRealtimeInput{
+	if err := s.send(genai.LiveRealtimeInput{
 		Audio: &genai.Blob{Data: pcm, MIMEType: s.inputFormat.MIMEType()},
-	})
+	}); err != nil {
+		return err
+	}
+	if note := s.takeNote(); note != "" {
+		return s.send(genai.LiveRealtimeInput{Text: note})
+	}
+	return nil
+}
+
+// NoteTurn implements [provider.TurnNoter]. The note follows the first
+// audio of the turn as realtime text: inside the user's activity it joins
+// that turn, while text sent on its own would be answered by itself under
+// server VAD, and client content must not be mixed with realtime input.
+func (s *session) NoteTurn(note string) error {
+	s.noteMu.Lock()
+	s.note = note
+	s.noteMu.Unlock()
+	return nil
+}
+
+func (s *session) takeNote() string {
+	s.noteMu.Lock()
+	defer s.noteMu.Unlock()
+	note := s.turnNote
+	s.turnNote = ""
+	return note
 }
 
 func (s *session) EndTurn() error {

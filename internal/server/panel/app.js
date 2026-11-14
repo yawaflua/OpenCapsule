@@ -107,6 +107,7 @@ const actionNames = {
   "home_find": "умный дом: найти", "home_control": "умный дом",
   "ring.set": "кольцо", "ring.reset": "кольцо как обычно", "display.show": "экран", "display.reset": "экран как обычно",
   "sensors.get": "датчики", "ring_set": "кольцо",
+  "eq.get": "эквалайзер", "eq.set": "эквалайзер", "eq.reset": "эквалайзер: стандартный",
 };
 
 function deviceName(sessionOrDevice) {
@@ -317,6 +318,7 @@ $("#install-form").addEventListener("submit", async (e) => {
     port: Number($("#inst-port").value) || 22,
     name: $("#inst-name").value,
     dbus: $("#inst-dbus").checked,
+    sound: $("#inst-sound").checked,
     airplay: $("#inst-airplay").checked,
     spotify: $("#inst-spotify").checked,
   };
@@ -488,6 +490,12 @@ function renderDetail() {
   for (const c of sayForm.elements) c.disabled = !d.can_say || d.state !== "idle";
 
   const live = state.live[d.session] || {};
+  // The bands are filled only when they come from the speaker, so the
+  // periodic re-render does not undo what is being typed.
+  if (live.eqFresh && live.eq) {
+    fillEQ(box, live.eq);
+    live.eqFresh = false;
+  }
   if (live.volume != null) {
     const vol = f(box, "vol");
     if (document.activeElement !== vol) vol.value = live.volume;
@@ -643,6 +651,9 @@ async function loadLive(session) {
     jobs.push(command(session, "media.status").then((r) => { live.media = r.data; }));
   }
   if (caps.has("sensors.get")) jobs.push(loadSurface(session));
+  if (caps.has("eq.get")) {
+    jobs.push(command(session, "eq.get").then((r) => { live.eq = r.data; live.eqFresh = true; }));
+  }
   await Promise.allSettled(jobs);
   if (state.selected === session) renderDetail();
 }
@@ -794,6 +805,21 @@ function wireDetail(box, session) {
     b.addEventListener("click", () => surfaceCmd(b, "display.show", { mode: b.dataset.disp, brightness: dispBri(), seconds: hold() }));
   }
   f(box, "disp-reset").addEventListener("click", (e) => surfaceCmd(e.target, "display.reset", {}));
+
+  buildEQ(box);
+  const eqCmd = async (btn, action, args) => {
+    const r = await run(btn, () => command(session, action, args), action === "eq.reset" ? "Стандартный звук" : "Эквалайзер сохранён");
+    if (r) {
+      live().eq = r.data;
+      live().eqFresh = true;
+      renderDetail();
+    }
+  };
+  f(box, "eq-apply").addEventListener("click", (e) => {
+    const bands = readEQ(box);
+    if (bands) eqCmd(e.target, "eq.set", { bands });
+  });
+  f(box, "eq-reset").addEventListener("click", (e) => eqCmd(e.target, "eq.reset", {}));
   const bri = f(box, "disp-bri");
   bri.addEventListener("input", () => (f(box, "disp-bri-value").textContent = bri.value > 0 ? `${bri.value}%` : "по датчику"));
   // Brightness keeps what the display shows now (the face if nothing).
@@ -825,6 +851,58 @@ function wireDetail(box, session) {
     if (r) toast(r.data?.title ? `Играет: ${r.data.title}` : "Включила");
     setTimeout(() => loadLive(session), 1500);
   });
+}
+
+// Equalizer bands, as the Eq4p LADSPA plugin numbers its modes. The limits
+// match models.EQBand.Validate on the speaker.
+const eqModes = [[-1, "выключена"], [0, "низкие (полка)"], [1, "пик / провал"], [2, "высокие (полка)"]];
+const eqFields = [
+  ["freq", "Частота, Гц", 20, 14000, 1],
+  ["q", "Ширина Q", 0, 1, 0.05],
+  ["gain", "Усиление, дБ", -24, 12, 0.5],
+];
+
+function buildEQ(box) {
+  const grid = f(box, "eq-bands");
+  for (let i = 0; i < 4; i++) {
+    grid.append(el("select", { "data-eq": `${i}.mode`, "aria-label": `Полоса ${i + 1}: тип` },
+      ...eqModes.map(([v, t]) => el("option", { value: v, text: `${i + 1}: ${t}` }))));
+    for (const [k, label, min, max, step] of eqFields) {
+      grid.append(el("input", { type: "number", min, max, step, required: true, "data-eq": `${i}.${k}`, "aria-label": `Полоса ${i + 1}: ${label}` }));
+    }
+  }
+}
+
+function fillEQ(box, eq) {
+  (eq.bands || []).forEach((b, i) => {
+    for (const k of ["mode", "freq", "q", "gain"]) {
+      const input = $(`[data-eq="${i}.${k}"]`, box);
+      if (input) input.value = b[k];
+    }
+  });
+  f(box, "eq-state").textContent = eq.custom ? "свои настройки" : "стандартный";
+  f(box, "eq-reset").disabled = !eq.custom;
+}
+
+// readEQ returns the bands from the form, or null after pointing at the
+// first wrong field.
+function readEQ(box) {
+  const bands = [];
+  for (let i = 0; i < 4; i++) {
+    const band = { mode: Number($(`[data-eq="${i}.mode"]`, box).value) };
+    for (const [k, label, min, max] of eqFields) {
+      const input = $(`[data-eq="${i}.${k}"]`, box);
+      const v = input.valueAsNumber;
+      if (!Number.isFinite(v) || v < min || v > max) {
+        toast(`Полоса ${i + 1}: ${label.toLowerCase()} — от ${min} до ${max}`, true);
+        input.focus();
+        return null;
+      }
+      band[k] = v;
+    }
+    bands.push(band);
+  }
+  return bands;
 }
 
 async function loadSurface(session) {

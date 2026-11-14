@@ -35,6 +35,10 @@ import (
 	"github.com/yawaflua/marusya-gemini/internal/models"
 )
 
+// StatusSource names server streams (YouTube, radio) in
+// [models.MediaStatus.Source].
+const StatusSource = "stream"
+
 // Player plays [media.Source] tracks.
 type Player struct {
 	Source media.Source
@@ -177,7 +181,7 @@ func (p *Player) Control(ctx context.Context, op models.MediaOperation) error {
 // Status implements [controller.Media].
 func (p *Player) Status(ctx context.Context) (models.MediaStatus, error) {
 	if pb := p.current(); pb != nil {
-		return models.MediaStatus{Playing: !pb.isPaused(), Title: pb.title}, nil
+		return models.MediaStatus{Playing: !pb.isPaused(), Title: pb.title, Source: StatusSource}, nil
 	}
 	if p.Next == nil {
 		return models.MediaStatus{}, nil

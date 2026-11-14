@@ -302,7 +302,7 @@ func (d *deviceSession) onMessage(m *models.Message) {
 	switch m.Type {
 	case models.TypeTurnStart:
 		if !d.askTurnStart(m) {
-			d.startTurn(m.TurnID)
+			d.startTurn(m)
 		}
 	case models.TypeTurnEnd:
 		if !d.askTurnEnd(m, false) {
@@ -546,7 +546,8 @@ func (d *deviceSession) deviceContext() string {
 	return b.String()
 }
 
-func (d *deviceSession) startTurn(turnID string) {
+func (d *deviceSession) startTurn(m *models.Message) {
+	turnID := m.TurnID
 	d.log.Debug("turn start", "turn", turnID)
 	ps, err := d.session()
 	if err == nil {
@@ -559,6 +560,7 @@ func (d *deviceSession) startTurn(turnID string) {
 			d.idle.Stop()
 		}
 		d.mu.Unlock()
+		d.noteTurn(ps, m)
 		err = ps.StartTurn()
 		d.srv.events.devicesChanged()
 	}

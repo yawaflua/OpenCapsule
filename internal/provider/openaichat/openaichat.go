@@ -239,7 +239,7 @@ func (c *conversation) Turn(ctx context.Context, text string, out *pipeline.Outp
 		}
 	}
 	// Messages of this turn join the history only if it completes.
-	msgs := append(c.history[:len(c.history):len(c.history)], message{Role: "user", Content: text})
+	msgs := append(c.history[:len(c.history):len(c.history)], message{Role: "user", Content: out.WithNote(text)})
 	for range maxIterations {
 		msg, err := c.generate(ctx, msgs, out)
 		if err != nil {

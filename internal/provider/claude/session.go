@@ -45,7 +45,7 @@ func (c *conversation) Turn(ctx context.Context, text string, out *pipeline.Outp
 	// Messages of this turn join the history only if it completes, so an
 	// abandoned turn never leaves an unanswered tool call behind.
 	msgs := append(c.history[:len(c.history):len(c.history)],
-		anthropic.NewUserMessage(anthropic.NewTextBlock(text)))
+		anthropic.NewUserMessage(anthropic.NewTextBlock(out.WithNote(text))))
 	for range maxIterations {
 		msg, err := c.generate(ctx, msgs, out)
 		if err != nil {

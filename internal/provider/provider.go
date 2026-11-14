@@ -107,6 +107,14 @@ type TextSender interface {
 	SendText(text string) error
 }
 
+// TurnNoter is implemented by sessions that can give the model a note for
+// the next user turn only: what the speaker knows at that moment, e.g. the
+// music playing. Called before [Session.StartTurn]; the note must not make
+// the model answer by itself.
+type TurnNoter interface {
+	NoteTurn(note string) error
+}
+
 // TextProvider is implemented by providers whose sessions are [TextSender]s.
 type TextProvider interface {
 	AcceptsText() bool

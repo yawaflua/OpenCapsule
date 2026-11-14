@@ -35,6 +35,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	agentdeploy "github.com/yawaflua/marusya-gemini/deploy/agent"
+	"github.com/yawaflua/marusya-gemini/internal/audio/asoundconf"
 )
 
 // speakerStubs stand in for the speaker's commands. They log their
@@ -283,6 +284,52 @@ func TestInstallDBus(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(root, "addgroup.log")); got != "-S marusya\n" {
 		t.Errorf("addgroup ran again: %q", got)
+	}
+}
+
+func TestInstallSound(t *testing.T) {
+	addr, root := fakeSpeaker(t, "pw")
+	req := speakerRequest(t, addr, "pw")
+	conf := filepath.Join(root, "etc/asound.conf")
+
+	if res, _, err := fakeInstaller(t, "tok").run(context.Background(), req); err != nil {
+		t.Fatalf("install: %v\n%s", err, res.Output)
+	}
+	if _, err := os.Stat(conf); err == nil {
+		t.Error("asound.conf written without asking")
+	}
+
+	// A file of the owner's is kept aside and replaced by the template.
+	const own = "pcm.!default { type hw card 0 }\n"
+	os.WriteFile(conf, []byte(own), 0o644)
+	req.Sound = true
+	res, _, err := fakeInstaller(t, "tok").run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("install with sound: %v\n%s", err, res.Output)
+	}
+	if got := readFile(t, conf); got != asoundconf.Template {
+		t.Errorf("asound.conf differs from the template:\n%s", got)
+	}
+	if got := readFile(t, conf+".orig"); got != own {
+		t.Errorf("asound.conf.orig %q", got)
+	}
+	// The file is in place before the agent restarts.
+	if i, j := strings.Index(res.Output, "== Звук =="), strings.Index(res.Output, "== Агент =="); i < 0 || i > j {
+		t.Errorf("output:\n%s", res.Output)
+	}
+
+	// A managed file belongs to the agent: the equalizer set in the panel
+	// survives a reinstall, and the original copy is not overwritten.
+	tuned := strings.Replace(asoundconf.Template, asoundconf.Marker+" default", asoundconf.Marker+" custom", 1)
+	os.WriteFile(conf, []byte(tuned), 0o644)
+	if res, _, err := fakeInstaller(t, "tok").run(context.Background(), req); err != nil {
+		t.Fatalf("reinstall: %v\n%s", err, res.Output)
+	}
+	if got := readFile(t, conf); got != tuned {
+		t.Error("reinstall replaced a managed asound.conf")
+	}
+	if got := readFile(t, conf+".orig"); got != own {
+		t.Errorf("asound.conf.orig overwritten: %q", got)
 	}
 }
 

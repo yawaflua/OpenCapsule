@@ -36,12 +36,14 @@ import (
 
 	"github.com/yawaflua/marusya-gemini/configs"
 	agentdeploy "github.com/yawaflua/marusya-gemini/deploy/agent"
+	"github.com/yawaflua/marusya-gemini/internal/audio/asoundconf"
 )
 
 // installRequest sets up a speaker over SSH from the web panel, the same as
 // "make deploy-agent": the OpenRC service and its config, which download
 // the agent from this server on every start. Optionally also the agent's
-// D-Bus service, the AirPlay 2 receiver and spotifyd. The password is used once and never stored.
+// D-Bus service, the speaker's ALSA setup with the equalizer, the AirPlay 2
+// receiver and spotifyd. The password is used once and never stored.
 type installRequest struct {
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
@@ -53,7 +55,9 @@ type installRequest struct {
 	// Name is how the speaker shows up in AirPlay and Spotify.
 	Name string `json:"name"`
 	// DBus registers ru.marusya.Agent on the speaker's system bus.
-	DBus    bool `json:"dbus"`
+	DBus bool `json:"dbus"`
+	// Sound writes /etc/asound.conf with the equalizer, see [asoundScript].
+	Sound   bool `json:"sound"`
 	AirPlay bool `json:"airplay"`
 	Spotify bool `json:"spotify"`
 }
@@ -125,6 +129,27 @@ rc-update add dbus default >/dev/null 2>&1 || true
 rc-service dbus status >/dev/null 2>&1 || rc-service dbus start
 dbus-send --system --type=signal / org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
 echo "ru.marusya.Agent: правила D-Bus установлены"
+`
+
+// asoundScript puts [asoundconf.Template] from stdin into /etc/asound.conf.
+// A file the agent already manages is left to it: the agent updates it on
+// start and keeps the equalizer set in the panel. A file of another origin
+// is kept once as /etc/asound.conf.orig. It runs before the agent restarts
+// and before AirPlay, whose installer needs the file.
+const asoundScript = `set -e
+c="${INSTALL_ROOT:-}/etc/asound.conf"
+if [ -f "$c" ] && grep -qF '` + asoundconf.Marker + `' "$c"; then
+	cat >/dev/null
+	echo "ALSA: asound.conf уже настроен, агент обновит его сам"
+	exit 0
+fi
+if [ -f "$c" ] && [ ! -f "$c.orig" ]; then
+	cat "$c" > "$c.orig"
+	echo "ALSA: прежний файл сохранён в /etc/asound.conf.orig"
+fi
+cat > "$c"
+sync
+echo "ALSA: установлен asound.conf с эквалайзером"
 `
 
 // airplayScript unpacks the bundle from stdin and runs its installer, which
@@ -247,7 +272,7 @@ func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errors.New("токен сервера содержит перевод строки"))
 		return
 	}
-	log := s.cfg.Logger.With("host", req.Host, "remote", r.RemoteAddr, "dbus", req.DBus, "airplay", req.AirPlay, "spotify", req.Spotify)
+	log := s.cfg.Logger.With("host", req.Host, "remote", r.RemoteAddr, "dbus", req.DBus, "sound", req.Sound, "airplay", req.AirPlay, "spotify", req.Spotify)
 	log.Info("installing on a speaker")
 	ctx, cancel := context.WithTimeout(r.Context(), installTimeout)
 	defer cancel()
@@ -294,6 +319,13 @@ func (in *installer) run(ctx context.Context, req installRequest) (res installRe
 		fmt.Fprintln(&out, "== D-Bus ==")
 		if err := runRemote(ctx, client, dbusScript, strings.NewReader(agentdeploy.AgentDBus), &out); err != nil {
 			return res, nil, fmt.Errorf("регистрация в D-Bus не удалась: %w", err)
+		}
+		fmt.Fprintln(&out)
+	}
+	if req.Sound {
+		fmt.Fprintln(&out, "== Звук ==")
+		if err := runRemote(ctx, client, asoundScript, strings.NewReader(asoundconf.Template), &out); err != nil {
+			return res, nil, fmt.Errorf("настройка звука не удалась: %w", err)
 		}
 		fmt.Fprintln(&out)
 	}

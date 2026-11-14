@@ -32,6 +32,9 @@ import (
 	"github.com/yawaflua/marusya-gemini/internal/models"
 )
 
+// Source names mpv in [models.MediaStatus.Source].
+const Source = "mpv"
+
 // Player controls an mpv instance.
 type Player struct {
 	// Socket is the path passed to mpv's --input-ipc-server.
@@ -185,6 +188,7 @@ func (p *Player) Status(ctx context.Context) (models.MediaStatus, error) {
 	if string(idle) == "true" {
 		return s, nil
 	}
+	s.Source = Source
 	if paused, err := p.call(ctx, "get_property", "pause"); err == nil {
 		s.Playing = string(paused) == "false"
 	}

@@ -15,6 +15,11 @@ MARUSYA_LOCATION=
 MARUSYA_TIMEZONE=
 MARUSYA_CAPTURE_DEVICE=default
 MARUSYA_PLAYBACK_DEVICE=default
+# ALSA config with the speaker equalizer (Колонки → Эквалайзер in the web
+# panel). The installer writes it; on every start the agent updates it to
+# its built-in copy, keeping bands set in the panel. A file without
+# "# marusya-eq:" lines is left alone. Empty disables the equalizer.
+MARUSYA_ASOUND_CONF=/etc/asound.conf
 MARUSYA_MIXER_CONTROL=Master
 # Run this command with the assistant state on every change, e.g. to
 # drive an LED ring owned by another process (see indicator/statecmd).
@@ -28,6 +33,12 @@ MARUSYA_VOLUME_CMD=
 MARUSYA_WAKE_COMMAND=
 # Hardware button: evdev node (see `cat /proc/bus/input/devices`).
 MARUSYA_BUTTON_DEVICE=
+
+# Touch panel while music plays: a short press of the centre key pauses it
+# (pressed again within 10 minutes, plays on), a tap on VOL+/VOL- skips to
+# the next/previous track, holding a volume key still changes the volume.
+# Without music the keys work as before. false: centre = assistant always.
+MARUSYA_TOUCH_MEDIA_KEYS=true
 
 # Bluetooth pairing: "auto" = bt-pair if present, "" = built-in bluetoothctl flow.
 MARUSYA_BT_PAIR_COMMAND=auto

@@ -43,6 +43,7 @@ import (
 
 	"github.com/yawaflua/marusya-gemini/internal/agent"
 	"github.com/yawaflua/marusya-gemini/internal/audio/alsa"
+	"github.com/yawaflua/marusya-gemini/internal/audio/asoundconf"
 	"github.com/yawaflua/marusya-gemini/internal/config"
 	"github.com/yawaflua/marusya-gemini/internal/controller"
 	"github.com/yawaflua/marusya-gemini/internal/controller/airplay"
@@ -87,6 +88,7 @@ var (
 
 	captureDevice  = flag.String("capture_device", config.Env("MARUSYA_CAPTURE_DEVICE", "default"), "ALSA capture PCM.")
 	playbackDevice = flag.String("playback_device", config.Env("MARUSYA_PLAYBACK_DEVICE", "default"), "ALSA playback PCM.")
+	asoundConf     = flag.String("asound_conf", config.Env("MARUSYA_ASOUND_CONF", "/etc/asound.conf"), "ALSA config with the speaker equalizer, written by the installer. On start the agent updates it to its built-in copy, keeping bands set in the web panel; a file without \"# marusya-eq:\" lines is left alone. Empty disables the equalizer.")
 
 	wakeCommand  = flag.String("wake_command", config.Env("MARUSYA_WAKE_COMMAND", ""), "Keyword spotter command: reads 16 kHz mono S16LE PCM on stdin, prints a line per detection.")
 	wakeCooldown = flag.Duration("wake_cooldown", 1500*time.Millisecond, "Ignore repeated keyword detections within this period.")
@@ -127,6 +129,7 @@ var (
 
 	touchKeys      = flag.String("touch_keys", config.Env("MARUSYA_TOUCH_KEYS", "auto"), `Touch panel: "auto" (find "Hynitron CSK05T"), an evdev node, or empty to disable.`)
 	touchCenterKey = flag.Uint("touch_center_key", touchkeys.KeyVoice, "Key code of the centre key that activates the assistant.")
+	touchMediaKeys = flag.Bool("touch_media_keys", config.EnvBool("MARUSYA_TOUCH_MEDIA_KEYS", true), "While music plays, a short press of the centre key pauses it (and, pressed again within 10 minutes, plays on), a tap on volume up/down skips to the next/previous track; holding a volume key still changes the volume.")
 
 	ringMode          = flag.String("ring", config.Env("MARUSYA_RING", "auto"), `LED ring: "auto" (on a VK Capsula Mini, by its device tree), "on" or empty to disable.`)
 	ringDev           = flag.String("ring_dev", config.Env("MARUSYA_RING_DEV", ringled.DefaultDevice), "spidev node of the LED ring.")
@@ -232,6 +235,21 @@ func run() error {
 
 	// Device controllers. Leave interfaces nil to disable an area.
 	dispatcher := &controller.Dispatcher{}
+	if *asoundConf != "" {
+		eq := asoundconf.New(*asoundConf)
+		changed, err := eq.Sync()
+		switch {
+		case err == nil:
+			dispatcher.Equalizer = eq
+			if changed {
+				log.Info("asound.conf updated", "path", *asoundConf)
+			}
+		case errors.Is(err, asoundconf.ErrUnmanaged), errors.Is(err, os.ErrNotExist):
+			log.Info("equalizer disabled: asound.conf is not set up by the installer", "path", *asoundConf)
+		default:
+			log.Warn("equalizer disabled", "err", err)
+		}
+	}
 	if *volumeCmd != "" {
 		dispatcher.Volume = &volumecmd.Volume{Command: *volumeCmd}
 	} else if *mixerControl != "" {
@@ -341,6 +359,7 @@ func run() error {
 	if *touchKeys != "" {
 		cfg := touchkeys.DefaultConfig()
 		cfg.CenterKey = uint16(*touchCenterKey)
+		cfg.MediaKeys = *touchMediaKeys
 		if *touchKeys != "auto" {
 			cfg.Device = *touchKeys
 		}
@@ -444,6 +463,7 @@ func run() error {
 		defer streams.Stop()
 	}
 	if touch != nil {
+		touch.Busy = a.Busy
 		touch.OnMicMute = func(muted bool) {
 			a.SetMicMuted(muted)
 			surf.SetMicMuted(muted)

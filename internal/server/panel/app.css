@@ -452,6 +452,14 @@ body:not(.tunable) .tunable { display: none; }
 .surface select { width: auto; }
 .surface .facts { border-top: 1px solid var(--md-outline-variant); padding-top: 16px; }
 
+/* Equalizer: one row per band */
+.eq-bands { display: grid; grid-template-columns: minmax(120px, 1.4fr) repeat(3, minmax(70px, 1fr)); gap: 8px; align-items: center; }
+.eq-bands input { padding: 8px 10px; height: 40px; font-size: 14px; }
+@media (max-width: 480px) {
+  .eq-bands { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .eq-bands > span { display: none; }
+}
+
 .plugin-errors { margin: 8px 0 0; padding-left: 20px; }
 .plugin .tools { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .plugin .tools code { font-size: 12px; }

@@ -94,10 +94,11 @@ type session struct {
 	preroll   [][]byte
 	idle      [][]byte // idle microphone audio, replayed after a wake
 	idleBytes int
-	idleAt    time.Time // when the last idle frame arrived
-	failed    bool      // the current turn produced an error
-	replied   bool      // the current turn produced audio
-	ducked    bool      // media was paused by us and must be resumed
+	idleAt    time.Time           // when the last idle frame arrived
+	failed    bool                // the current turn produced an error
+	replied   bool                // the current turn produced audio
+	ducked    bool                // media was paused by us and must be resumed
+	media     *models.MediaStatus // the player before the turn, see duck
 	heard     strings.Builder
 	said      strings.Builder
 
@@ -323,7 +324,7 @@ func (s *session) listenFrame(ctx context.Context, f []byte) {
 		s.pushPreroll(f)
 	case vad.SpeechStarted:
 		s.speech = true
-		s.send(ctx, &models.Message{Type: models.TypeTurnStart, TurnID: s.turnID, ReplyTo: s.replyTo})
+		s.send(ctx, &models.Message{Type: models.TypeTurnStart, TurnID: s.turnID, ReplyTo: s.replyTo, Media: s.turnMedia()})
 		for _, p := range s.preroll {
 			s.sendAudio(ctx, p)
 		}
@@ -631,18 +632,36 @@ func (s *session) reset(ctx context.Context) {
 	s.unduck(uctx)
 }
 
+// duck remembers what the media player does, for the model (see
+// turnMedia), and pauses the music while the assistant is active. Music
+// still ducked from the previous turn keeps its remembered status: the
+// player itself reports it paused now.
 func (s *session) duck(ctx context.Context) {
 	m := s.a.dispatcher.Media
-	if !s.a.cfg.DuckMedia || m == nil || s.ducked {
+	if m == nil || s.ducked {
 		return
 	}
 	st, err := m.Status(ctx)
-	if err != nil || !st.Playing {
+	if err != nil {
+		s.media = nil
+		return
+	}
+	s.media = &st
+	if !s.a.cfg.DuckMedia || !st.Playing {
 		return
 	}
 	if err := m.Control(ctx, models.MediaPause); err == nil {
 		s.ducked = true
 	}
+}
+
+// turnMedia is the media status sent with turn_start
+// ([models.FeatureTurnMedia]); nil when nothing is loaded.
+func (s *session) turnMedia() *models.MediaStatus {
+	if s.media == nil || !s.media.Active() {
+		return nil
+	}
+	return s.media
 }
 
 func (s *session) unduck(ctx context.Context) {

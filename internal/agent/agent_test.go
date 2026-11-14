@@ -56,7 +56,8 @@ func (m *fakeMic) Run(ctx context.Context, out chan<- []byte) error {
 			frame := silence
 			if m.speechFrames.Load() > 0 {
 				m.speechFrames.Add(-1)
-				frame = tone
+				// A copy: the agent filters frames in place.
+				frame = slices.Clone(tone)
 			}
 			select {
 			case out <- frame:

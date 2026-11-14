@@ -119,3 +119,37 @@ func TestOpenSpotify(t *testing.T) {
 		t.Errorf("http link: calls %q", f.calls)
 	}
 }
+
+// runFunc is a [syscmd.Runner] answering from a function.
+type runFunc func(call string) (string, error)
+
+func (f runFunc) Run(_ context.Context, name string, args ...string) (string, error) {
+	return f(name + " " + strings.Join(args, " "))
+}
+
+func TestStatusNamesThePlayer(t *testing.T) {
+	p := &Player{Runner: runFunc(func(call string) (string, error) {
+		switch call {
+		case "playerctl status":
+			return "Paused", nil
+		case "playerctl metadata --format {{ playerName }}\t{{ artist }} - {{ title }}":
+			return "spotifyd\tКино - Группа крови", nil
+		}
+		return "", nil
+	})}
+	st, err := p.Status(context.Background())
+	if err != nil || st.Playing || st.Title != "Кино - Группа крови" || st.Source != "spotifyd" {
+		t.Errorf("status = %+v, %v", st, err)
+	}
+
+	// No metadata: the configured name, or "playerctl".
+	p = &Player{Name: "spotifyd", Runner: runFunc(func(call string) (string, error) {
+		if call == "playerctl -p spotifyd status" {
+			return "Playing", nil
+		}
+		return "", nil
+	})}
+	if st, _ := p.Status(context.Background()); !st.Playing || st.Source != "spotifyd" || st.Title != "" {
+		t.Errorf("status without metadata = %+v", st)
+	}
+}

@@ -77,6 +77,9 @@ func (a *Agent) execute(ctx context.Context, cmd *models.Command) *models.Comman
 // features lists the protocol extensions of the agent.
 func (a *Agent) features() []models.Feature {
 	fs := []models.Feature{models.FeatureRemoteTurn, models.FeatureServerWake, models.FeatureAnnounce, models.FeatureAlarms}
+	if a.dispatcher.Media != nil {
+		fs = append(fs, models.FeatureTurnMedia)
+	}
 	if a.plugins != nil {
 		fs = append(fs, models.FeaturePlugins)
 	}

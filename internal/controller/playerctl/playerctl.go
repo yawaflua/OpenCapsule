@@ -18,6 +18,7 @@ package playerctl
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -333,7 +334,16 @@ func (p *Player) Status(ctx context.Context) (models.MediaStatus, error) {
 		return s, err
 	}
 	s.Playing = out == "Playing"
-	if title, err := p.run(ctx, "metadata", "--format", "{{ artist }} - {{ title }}"); err == nil {
+	s.Source = cmp.Or(p.Name, "playerctl")
+	// One call for both: the player name tells the model it is Spotify.
+	if meta, err := p.run(ctx, "metadata", "--format", "{{ playerName }}\t{{ artist }} - {{ title }}"); err == nil {
+		name, title, ok := strings.Cut(meta, "\t")
+		if !ok {
+			name, title = "", meta
+		}
+		if name = strings.TrimSpace(name); name != "" {
+			s.Source = name
+		}
 		s.Title = strings.Trim(title, " -")
 	}
 	return s, nil

@@ -16,6 +16,8 @@ package controller_test
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -141,5 +143,59 @@ func TestDispatcherSurface(t *testing.T) {
 	}
 	if got := len(d.Capabilities()); got != 5 {
 		t.Errorf("capabilities = %d, want 5", got)
+	}
+}
+
+type fakeEQ struct{ st models.EQState }
+
+func (f *fakeEQ) EQ(context.Context) (models.EQState, error) { return f.st, nil }
+func (f *fakeEQ) SetEQ(_ context.Context, b []models.EQBand) error {
+	f.st.Bands, f.st.Custom = b, true
+	return nil
+}
+func (f *fakeEQ) ResetEQ(context.Context) error {
+	f.st.Bands, f.st.Custom = f.st.Defaults, false
+	return nil
+}
+
+func TestDispatcherEqualizer(t *testing.T) {
+	ctx := context.Background()
+	def := []models.EQBand{{Mode: 1, Freq: 460, Q: 0.9, Gain: -6}, {Mode: 1, Freq: 225, Q: 0.8, Gain: -3}, {Mode: 1, Freq: 1650, Q: 0.85, Gain: -6}, {Mode: 1, Freq: 4700, Q: 0.85, Gain: -6}}
+	eq := &fakeEQ{st: models.EQState{Bands: def, Defaults: def}}
+	d := &controller.Dispatcher{Equalizer: eq}
+	if caps := d.Capabilities(); !slices.Contains(caps, models.ActionEQSet) || !slices.Contains(caps, models.ActionEQGet) {
+		t.Fatalf("capabilities %v", caps)
+	}
+
+	// The arguments arrive the way the wire decodes them.
+	var args map[string]any
+	if err := json.Unmarshal([]byte(`{"bands":[
+		{"mode":0,"freq":150,"q":0.5,"gain":-2},
+		{"mode":1,"freq":450,"q":0.9,"gain":-7.5},
+		{"mode":1,"freq":1650,"q":0.85,"gain":-6},
+		{"mode":-1,"freq":8000,"q":0.25,"gain":0}]}`), &args); err != nil {
+		t.Fatal(err)
+	}
+	res := d.Execute(ctx, &models.Command{Action: models.ActionEQSet, Args: args})
+	if !res.OK || !eq.st.Custom || eq.st.Bands[1].Gain != -7.5 || eq.st.Bands[3].Mode != models.EQOff {
+		t.Fatalf("set: %+v, %+v", res, eq.st)
+	}
+	if res.Data["custom"] != true {
+		t.Errorf("set result %v", res.Data)
+	}
+
+	for name, bad := range map[string]map[string]any{
+		"missing":    nil,
+		"three":      {"bands": []any{map[string]any{"mode": 1, "freq": 100, "q": 0.5, "gain": 0}}},
+		"loud":       {"bands": []any{args["bands"].([]any)[0], args["bands"].([]any)[1], args["bands"].([]any)[2], map[string]any{"mode": 1, "freq": 100, "q": 0.5, "gain": 18}}},
+		"not a list": {"bands": "flat"},
+	} {
+		if res := d.Execute(ctx, &models.Command{Action: models.ActionEQSet, Args: bad}); res.OK {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+
+	if res := d.Execute(ctx, &models.Command{Action: models.ActionEQReset}); !res.OK || eq.st.Custom || res.Data["custom"] != false {
+		t.Errorf("reset: %+v, %+v", res, eq.st)
 	}
 }

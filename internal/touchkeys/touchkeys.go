@@ -20,6 +20,13 @@
 //	PROG1           next track
 //	MICMUTE         mute the microphone
 //
+// With [Config.MediaKeys], while music plays (see [models.MediaStatus]):
+//
+//	VOL+ / VOL-, tap    next / previous track
+//	VOL+ / VOL-, hold   volume, as above, from [Config.RepeatDelay] on
+//	centre, short       pause; pressed again within [Config.ResumeWindow],
+//	                    play on
+//
 // [Panel] is a [wakeword.Detector], so the centre key activates the agent
 // exactly like a wake word.
 package touchkeys
@@ -64,6 +71,13 @@ type Config struct {
 	RepeatDelay, RepeatInterval time.Duration
 	// PairTimeout is passed to [controller.Bluetooth.Pair].
 	PairTimeout time.Duration
+	// MediaKeys makes the keys control the track while music plays: a
+	// volume key released before RepeatDelay skips the track, the centre
+	// key pauses and resumes.
+	MediaKeys bool
+	// ResumeWindow is how long after a pause by the centre key a short
+	// press plays on instead of activating the assistant.
+	ResumeWindow time.Duration
 }
 
 // DefaultConfig returns the VK Capsula Mini layout.
@@ -80,6 +94,8 @@ func DefaultConfig() Config {
 		RepeatDelay:    400 * time.Millisecond,
 		RepeatInterval: 150 * time.Millisecond,
 		PairTimeout:    2 * time.Minute,
+		MediaKeys:      true,
+		ResumeWindow:   10 * time.Minute,
 	}
 }
 
@@ -120,10 +136,15 @@ type Panel struct {
 	OnMicMute func(muted bool)
 	// OnKey, if set, is called for every press and release with the key
 	// name (see [Config.KeyName]), before the key's own action.
-	OnKey  func(name string, code uint16, pressed bool)
+	OnKey func(name string, code uint16, pressed bool)
+	// Busy, if set, reports that the assistant is listening or answering:
+	// the centre key then always goes to the assistant (to stop or barge
+	// in), not to the music.
+	Busy   func() bool
 	Logger *slog.Logger
 
-	muted bool
+	muted    bool
+	pausedAt time.Time // when the centre key paused the music
 }
 
 var _ wakeword.Detector = (*Panel)(nil)
@@ -161,12 +182,15 @@ func (p *Panel) Run(ctx context.Context, _ <-chan []byte, out chan<- wakeword.De
 		repT    *time.Timer
 		repC    <-chan time.Time
 		repD    int
+		// tapKey is a volume key pressed while music plays: released
+		// before the repeat starts, it skips the track.
+		tapKey uint16
 	)
 	stopRepeat := func() {
 		if repT != nil {
 			repT.Stop()
 		}
-		repC, repD = nil, 0
+		repC, repD, tapKey = nil, 0, 0
 	}
 	for {
 		select {
@@ -176,6 +200,7 @@ func (p *Panel) Run(ctx context.Context, _ <-chan []byte, out chan<- wakeword.De
 			return err
 
 		case <-repC:
+			tapKey = 0 // held: it is a volume change after all
 			p.adjustVolume(ctx, repD)
 			repT = time.NewTimer(p.Config.RepeatInterval)
 			repC = repT.C
@@ -194,13 +219,20 @@ func (p *Panel) Run(ctx context.Context, _ <-chan []byte, out chan<- wakeword.De
 			}
 			switch ev.Code {
 			case p.Config.VolumeUpKey, p.Config.VolumeDownKey:
+				if !pressed && tapKey == ev.Code {
+					p.skip(ctx, ev.Code == p.Config.VolumeUpKey)
+				}
 				stopRepeat()
 				if pressed {
 					repD = p.Config.VolumeStep
 					if ev.Code == p.Config.VolumeDownKey {
 						repD = -repD
 					}
-					p.adjustVolume(ctx, repD)
+					if p.Config.MediaKeys && p.mediaStatus(ctx).Playing {
+						tapKey = ev.Code // decided on release or by the timer
+					} else {
+						p.adjustVolume(ctx, repD)
+					}
 					repT = time.NewTimer(p.Config.RepeatDelay)
 					repC = repT.C
 				}
@@ -213,7 +245,7 @@ func (p *Panel) Run(ctx context.Context, _ <-chan []byte, out chan<- wakeword.De
 				} else if longT != nil {
 					longT.Stop()
 					longC = nil
-					if !longHit {
+					if !longHit && !p.pauseOrResume(ctx) {
 						p.activate(out)
 					}
 				}
@@ -283,6 +315,63 @@ func (p *Panel) next(ctx context.Context) {
 	}
 	if err := m.Control(ctx, models.MediaNext); err != nil {
 		p.Logger.Warn("touch keys: next track", "err", err)
+	}
+}
+
+// mediaStatus reports what the media player does; nothing on errors.
+func (p *Panel) mediaStatus(ctx context.Context) models.MediaStatus {
+	m := p.Dispatcher.Media
+	if m == nil {
+		return models.MediaStatus{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	st, err := m.Status(ctx)
+	if err != nil {
+		p.Logger.Debug("touch keys: media status", "err", err)
+		return models.MediaStatus{}
+	}
+	return st
+}
+
+// pauseOrResume handles a short centre press with [Config.MediaKeys]: it
+// pauses the music playing, or plays on what this key paused a moment ago.
+// It reports whether the press was used; otherwise the assistant starts.
+func (p *Panel) pauseOrResume(ctx context.Context) bool {
+	if !p.Config.MediaKeys || p.Dispatcher.Media == nil || (p.Busy != nil && p.Busy()) {
+		return false
+	}
+	st := p.mediaStatus(ctx)
+	var op models.MediaOperation
+	switch {
+	case st.Playing:
+		op = models.MediaPause
+	case st.Active() && !p.pausedAt.IsZero() && time.Since(p.pausedAt) < p.Config.ResumeWindow:
+		op = models.MediaPlay
+	default:
+		p.pausedAt = time.Time{}
+		return false
+	}
+	if err := p.Dispatcher.Media.Control(ctx, op); err != nil {
+		p.Logger.Warn("touch keys: "+string(op), "err", err)
+		return true
+	}
+	if op == models.MediaPause {
+		p.pausedAt = time.Now()
+	} else {
+		p.pausedAt = time.Time{}
+	}
+	return true
+}
+
+// skip goes to the next or the previous track.
+func (p *Panel) skip(ctx context.Context, next bool) {
+	op := models.MediaPrevious
+	if next {
+		op = models.MediaNext
+	}
+	if err := p.Dispatcher.Media.Control(ctx, op); err != nil {
+		p.Logger.Warn("touch keys: "+string(op), "err", err)
 	}
 }
 

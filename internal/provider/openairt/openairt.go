@@ -255,6 +255,7 @@ type session struct {
 var (
 	_ provider.Session    = (*session)(nil)
 	_ provider.TextSender = (*session)(nil)
+	_ provider.TurnNoter  = (*session)(nil)
 )
 
 func (s *session) write(ctx context.Context, ev map[string]any) error {
@@ -330,6 +331,16 @@ func (s *session) EndTurn() error {
 		return err
 	}
 	return s.send(map[string]any{"type": "response.create"})
+}
+
+// NoteTurn implements [provider.TurnNoter]: a system message joins the
+// conversation before the user's audio; creating an item does not start a
+// response.
+func (s *session) NoteTurn(note string) error {
+	return s.send(map[string]any{"type": "conversation.item.create", "item": map[string]any{
+		"type": "message", "role": "system",
+		"content": []map[string]any{{"type": "input_text", "text": note}},
+	}})
 }
 
 // SendText implements [provider.TextSender].

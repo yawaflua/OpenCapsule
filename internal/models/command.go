@@ -167,10 +167,14 @@ func (v VolumeState) Map() map[string]any {
 type MediaStatus struct {
 	Playing bool   `json:"playing"`
 	Title   string `json:"title,omitempty"`
-	// Source is where the music comes from when it is not the speaker's
-	// own player, e.g. "airplay".
+	// Source names the player the music comes from: "mpv", "stream"
+	// (YouTube or radio decoded by the server), the MPRIS player behind
+	// playerctl such as "spotifyd", or "airplay". Empty if unknown.
 	Source string `json:"source,omitempty"`
 }
+
+// Active reports whether a track is loaded, playing or paused.
+func (s MediaStatus) Active() bool { return s.Playing || s.Title != "" }
 
 // Map converts the status into a generic result payload.
 func (s MediaStatus) Map() map[string]any {
